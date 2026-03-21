@@ -31,10 +31,12 @@
 #include "pdns/arguments.hh"
 #include "pdns/base32.hh"
 #include "pdns/dnssecinfra.hh"
+#include "pdns/misc.hh"
 #include <boost/algorithm/string.hpp>
 #include <sstream>
 #include <boost/format.hpp>
 #include <boost/scoped_ptr.hpp>
+#include <climits>
 
 #define ASSERT_ROW_COLUMNS(query, row, num) { if (row.size() != num) { throw PDNSException(std::string(query) + " returned wrong number of columns, expected "  #num  ", got " + std::to_string(row.size())); } }
 
@@ -138,6 +140,8 @@ GSQLBackend::GSQLBackend(const string &mode, const string &suffix)
   d_SearchRecordsQuery = getArg("search-records-query");
   d_SearchCommentsQuery = getArg("search-comments-query");
 
+  d_GetRRSetVersionQuery = getArg("get-rrset-version-query");
+
   d_query_stmt = nullptr;
   d_NoIdQuery_stmt = nullptr;
   d_IdQuery_stmt = nullptr;
@@ -206,6 +210,7 @@ GSQLBackend::GSQLBackend(const string &mode, const string &suffix)
   d_DeleteCommentsQuery_stmt = nullptr;
   d_SearchRecordsQuery_stmt = nullptr;
   d_SearchCommentsQuery_stmt = nullptr;
+  d_GetRRSetVersionQuery_stmt = nullptr;
 }
 
 void GSQLBackend::setNotified(domainid_t domain_id, uint32_t serial)
@@ -1592,10 +1597,10 @@ skiprow:
     try {
       (*d_query_stmt)->nextRow(row);
       if (!d_list) {
-        ASSERT_ROW_COLUMNS(d_query_name, row, 8); // lookup(), listSubZone()
+        ASSERT_ROW_COLUMNS(d_query_name, row, 9); // lookup(), listSubZone()
       }
       else {
-        ASSERT_ROW_COLUMNS(d_query_name, row, 9); // list()
+        ASSERT_ROW_COLUMNS(d_query_name, row, 10); // list()
       }
     } catch (SSqlException &e) {
       throw PDNSException("GSQLBackend get: "+e.txtReason());
@@ -1625,10 +1630,10 @@ bool GSQLBackend::get_unsafe(DNSResourceRecord& rec, std::vector<std::pair<std::
     try {
       (*d_query_stmt)->nextRow(row);
       if (!d_list) {
-        ASSERT_ROW_COLUMNS(d_query_name, row, 8); // lookup(), listSubZone()
+        ASSERT_ROW_COLUMNS(d_query_name, row, 9); // lookup(), listSubZone()
       }
       else {
-        ASSERT_ROW_COLUMNS(d_query_name, row, 9); // list()
+        ASSERT_ROW_COLUMNS(d_query_name, row, 10); // list()
       }
     } catch (SSqlException &e) {
       throw PDNSException("GSQLBackend get: "+e.txtReason());
@@ -1938,14 +1943,49 @@ void GSQLBackend::getAllDomains(vector<DomainInfo>* domains, bool getSerial, boo
   }
 }
 
+int GSQLBackend::getExistingRrsetVersion(domainid_t domain_id, const DNSName& qname, const QType& qt)
+{
+  try {
+    reconnectIfNeeded();
+    // clang-format off
+    d_GetRRSetVersionQuery_stmt->
+      bind("domain_id", domain_id)->
+      bind("qname", qname)->
+      bind("qtype", qt.toString())->
+      execute();
+    // clang-format on
+    SSqlStatement::row_t row;
+    if (d_GetRRSetVersionQuery_stmt->hasNextRow()) {
+      d_GetRRSetVersionQuery_stmt->nextRow(row);
+      d_GetRRSetVersionQuery_stmt->reset();
+      if (!row.empty() && !row[0].empty()) {
+        return pdns::checked_stoi<int>(row[0]);
+      }
+    }
+    d_GetRRSetVersionQuery_stmt->reset();
+  }
+  catch (SSqlException& e) {
+    throw PDNSException("GSQLBackend unable to read rrset version: " + e.txtReason());
+  }
+  return 0;
+}
+
 // NOLINTNEXTLINE(readability-identifier-length)
 bool GSQLBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset)
 {
+  int old_ver = 0;
   try {
     reconnectIfNeeded();
 
     if (!d_inTransaction) {
       throw PDNSException("replaceRRSet called outside of transaction");
+    }
+
+    if (qt != QType::ANY) {
+      old_ver = getExistingRrsetVersion(domain_id, qname, qt);
+    }
+    else if (!rrset.empty()) {
+      old_ver = getExistingRrsetVersion(domain_id, qname, rrset.front().qtype);
     }
 
     if (qt != QType::ANY) {
@@ -1997,11 +2037,28 @@ bool GSQLBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const
     catch (SSqlException &e) {
       throw PDNSException("GSQLBackend unable to delete comment for RRSet " + qname.toLogString() + "|" + qt.toString() + ": "+e.txtReason());
     }
-  }
-  for(const auto& rr: rrset) {
-    feedRecord(rr, DNSName());
+    return true;
   }
 
+  int new_ver;
+  if (old_ver >= INT_MAX) {
+    new_ver = 0;
+  }
+  else {
+    new_ver = old_ver + 1;
+  }
+  d_replace_rrset_version = new_ver;
+  d_inReplaceRRSet = true;
+  try {
+    for (const auto& rr : rrset) {
+      feedRecord(rr, DNSName());
+    }
+  }
+  catch (...) {
+    d_inReplaceRRSet = false;
+    throw;
+  }
+  d_inReplaceRRSet = false;
   return true;
 }
 
@@ -2041,6 +2098,21 @@ bool GSQLBackend::feedRecord(const DNSResourceRecord& r, const DNSName& ordernam
       d_InsertRecordQuery_stmt->bind("auth", r.auth);
     else
       d_InsertRecordQuery_stmt->bind("auth", true);
+
+    int verToStore = 0;
+    if (r.qtype.getCode() == QType::ENT || r.qtype.getCode() == 0) {
+      verToStore = 0;
+    }
+    else if (d_inReplaceRRSet) {
+      verToStore = d_replace_rrset_version;
+    }
+    else {
+      verToStore = getExistingRrsetVersion(r.domain_id, r.qname, r.qtype);
+      if (verToStore == 0) {
+        verToStore = 1;
+      }
+    }
+    d_InsertRecordQuery_stmt->bind("version", verToStore);
 
     d_InsertRecordQuery_stmt->
       execute()->
@@ -2331,7 +2403,7 @@ bool GSQLBackend::searchRecords(const string &pattern, size_t maxResults, vector
       SSqlStatement::row_t row;
       DNSResourceRecord r;
       d_SearchRecordsQuery_stmt->nextRow(row);
-      ASSERT_ROW_COLUMNS("search-records-query", row, 8);
+      ASSERT_ROW_COLUMNS("search-records-query", row, 9);
       try {
         extractRecord(row, r);
       } catch (...) {
@@ -2420,15 +2492,27 @@ void GSQLBackend::extractRecord(SSqlStatement::row_t& row, DNSResourceRecord& r)
 
   pdns::checked_stoi_into(r.domain_id, row[4]);
 
-  if (row.size() > 8) {   // if column 8 exists, it holds an ordername
-    if (!row.at(8).empty()) {
-      r.ordername=DNSName(boost::replace_all_copy(row.at(8), " ", ".")).labelReverse();
+  r.rrset_version = 0;
+  if (d_list) {
+    if (row.size() > 8) {
+      if (!row.at(8).empty()) {
+        r.ordername = DNSName(boost::replace_all_copy(row.at(8), " ", ".")).labelReverse();
+      }
+      else {
+        r.ordername.clear();
+      }
     }
     else {
       r.ordername.clear();
     }
+    if (row.size() > 9 && !row.at(9).empty()) {
+      pdns::checked_stoi_into(r.rrset_version, row.at(9));
+    }
   }
   else {
+    if (row.size() > 8 && !row.at(8).empty()) {
+      pdns::checked_stoi_into(r.rrset_version, row.at(8));
+    }
     r.ordername.clear();
   }
 }
@@ -2505,21 +2589,45 @@ void GSQLBackend::extractRecord_unsafe(SSqlStatement::row_t& row, DNSResourceRec
     rec.domain_id = 0;
   }
 
-  if (row.size() > 8) {   // if column 8 exists, it holds an ordername
-    try {
-      if (!row.at(8).empty()) {
-        rec.ordername=DNSName(boost::replace_all_copy(row.at(8), " ", ".")).labelReverse();
+  rec.rrset_version = 0;
+  if (d_list) {
+    if (row.size() > 8) {
+      try {
+        if (!row.at(8).empty()) {
+          rec.ordername = DNSName(boost::replace_all_copy(row.at(8), " ", ".")).labelReverse();
+        }
+        else {
+          rec.ordername.clear();
+        }
       }
-      else {
+      catch (...) {
+        invalid.emplace_back(std::make_pair("ordername", row.at(8)));
         rec.ordername.clear();
       }
     }
-    catch (...) {
-      invalid.emplace_back(std::make_pair("ordername", row.at(8)));
+    else {
       rec.ordername.clear();
+    }
+    if (row.size() > 9 && !row.at(9).empty()) {
+      try {
+        pdns::checked_stoi_into(rec.rrset_version, row.at(9));
+      }
+      catch (...) {
+        invalid.emplace_back(std::make_pair("rrset_version", row.at(9)));
+        rec.rrset_version = 0;
+      }
     }
   }
   else {
+    if (row.size() > 8 && !row.at(8).empty()) {
+      try {
+        pdns::checked_stoi_into(rec.rrset_version, row.at(8));
+      }
+      catch (...) {
+        invalid.emplace_back(std::make_pair("rrset_version", row.at(8)));
+        rec.rrset_version = 0;
+      }
+    }
     rec.ordername.clear();
   }
 }

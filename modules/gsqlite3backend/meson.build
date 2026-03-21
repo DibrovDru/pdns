@@ -14,6 +14,7 @@ module_resources = files(
   '4.2.0_to_4.3.0_schema.sqlite3.sql',
   '4.3.0_to_4.3.1_schema.sqlite3.sql',
   '4.3.1_to_4.7.0_schema.sqlite3.sql',
+  '4.7.0_to_4.8.0_schema_rrset.sqlite3.sql',
   'schema.sqlite3.sql',
 )
 

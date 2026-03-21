@@ -72,7 +72,7 @@ protected:
       d_RemoveAutoPrimary_stmt = d_db->prepare(d_RemoveAutoPrimaryQuery, 2);
       d_ListAutoPrimaries_stmt = d_db->prepare(d_ListAutoPrimariesQuery, 0);
       d_InsertZoneQuery_stmt = d_db->prepare(d_InsertZoneQuery, 4);
-      d_InsertRecordQuery_stmt = d_db->prepare(d_InsertRecordQuery, 9);
+      d_InsertRecordQuery_stmt = d_db->prepare(d_InsertRecordQuery, 10);
       d_InsertEmptyNonTerminalOrderQuery_stmt = d_db->prepare(d_InsertEmptyNonTerminalOrderQuery, 4);
       d_UpdatePrimaryOfZoneQuery_stmt = d_db->prepare(d_UpdatePrimaryOfZoneQuery, 2);
       d_UpdateKindOfZoneQuery_stmt = d_db->prepare(d_UpdateKindOfZoneQuery, 2);
@@ -123,6 +123,7 @@ protected:
       d_DeleteCommentsQuery_stmt = d_db->prepare(d_DeleteCommentsQuery, 1);
       d_SearchRecordsQuery_stmt = d_db->prepare(d_SearchRecordsQuery, 3);
       d_SearchCommentsQuery_stmt = d_db->prepare(d_SearchCommentsQuery, 3);
+      d_GetRRSetVersionQuery_stmt = d_db->prepare(d_GetRRSetVersionQuery, 3);
     }
   }
 
@@ -195,6 +196,7 @@ protected:
     d_DeleteCommentsQuery_stmt.reset();
     d_SearchRecordsQuery_stmt.reset();
     d_SearchCommentsQuery_stmt.reset();
+    d_GetRRSetVersionQuery_stmt.reset();
   }
 
 public:
@@ -268,6 +270,7 @@ protected:
   void extractRecord(SSqlStatement::row_t& row, DNSResourceRecord& rr);
   void extractRecord_unsafe(SSqlStatement::row_t& row, DNSResourceRecord& rec, std::vector<std::pair<std::string, std::string>>& invalid);
   void extractComment(SSqlStatement::row_t& row, Comment& c);
+  int getExistingRrsetVersion(domainid_t domain_id, const DNSName& qname, const QType& qt);
   void setLastCheck(domainid_t domain_id, time_t lastcheck);
   bool isConnectionUsable() {
     if (d_db) {
@@ -294,6 +297,8 @@ protected:
   DNSName d_qname;
   SSqlStatement::result_t d_result;
   unique_ptr<SSqlStatement>* d_query_stmt;
+  bool d_inReplaceRRSet{false};
+  int d_replace_rrset_version{0};
 
 private:
   string d_NoIdQuery;
@@ -380,6 +385,7 @@ private:
   string d_SearchRecordsQuery;
   string d_SearchCommentsQuery;
 
+  string d_GetRRSetVersionQuery;
 
   unique_ptr<SSqlStatement> d_NoIdQuery_stmt;
   unique_ptr<SSqlStatement> d_IdQuery_stmt;
@@ -449,6 +455,8 @@ private:
   unique_ptr<SSqlStatement> d_DeleteCommentsQuery_stmt;
   unique_ptr<SSqlStatement> d_SearchRecordsQuery_stmt;
   unique_ptr<SSqlStatement> d_SearchCommentsQuery_stmt;
+
+  unique_ptr<SSqlStatement> d_GetRRSetVersionQuery_stmt;
 
 protected:
   std::unique_ptr<SSql> d_db{nullptr};

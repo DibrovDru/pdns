@@ -26,6 +26,7 @@ CREATE TABLE records (
   disabled              BIT DEFAULT 0,
   ordername             VARBINARY(255) DEFAULT NULL,
   auth                  BIT DEFAULT 1,
+  version               BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (id)
 );
 

@@ -1,0 +1,3 @@
+IF OBJECT_ID('rrset', 'U') IS NOT NULL DROP TABLE rrset;
+
+ALTER TABLE records ADD version BIGINT NOT NULL DEFAULT 0;

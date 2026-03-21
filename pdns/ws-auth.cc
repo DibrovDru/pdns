@@ -93,7 +93,7 @@ double Ewma::getMax() const
   return d_max;
 }
 
-static void patchZone(UeberBackend& backend, const ZoneName& zonename, DomainInfo& domainInfo, const vector<Json>& rrsets, HttpResponse* resp);
+static void patchZone(UeberBackend& backend, const ZoneName& zonename, DomainInfo& domainInfo, const vector<Json>& rrsets, Json::array& skippedRrsets, HttpResponse* resp);
 
 AuthWebServer::AuthWebServer() :
   d_start(time(nullptr))
@@ -563,8 +563,14 @@ static void fillZone(UeberBackend& backend, const ZoneName& zonename, HttpRespon
         ttl = 0;
       }
 
+      int rrset_version_value{0};
+      bool have_rrset_version{false};
       while (rit != records.end() && rit->qname == current_qname && rit->qtype == current_qtype) {
         ttl = min(ttl, rit->ttl);
+        if (!have_rrset_version) {
+          rrset_version_value = rit->rrset_version;
+          have_rrset_version = true;
+        }
         std::string content;
         try {
           content = makeApiRecordContent(rit->qtype, rit->content);
@@ -599,6 +605,7 @@ static void fillZone(UeberBackend& backend, const ZoneName& zonename, HttpRespon
       rrset["records"] = rrset_records;
       rrset["comments"] = rrset_comments;
       rrset["ttl"] = (double)ttl;
+      rrset["version"] = have_rrset_version ? rrset_version_value : 0;
       rrsets.emplace_back(rrset);
       rrset.clear();
       rrset_records.clear();
@@ -2385,7 +2392,8 @@ static void apiServerZoneDetailPATCH(HttpRequest* req, HttpResponse* resp)
     throw ApiException("No rrsets given in update request");
   }
 
-  patchZone(zoneData.backend, zoneData.zoneName, zoneData.domainInfo, rrsets.array_items(), resp);
+  Json::array skippedRrsets;
+  patchZone(zoneData.backend, zoneData.zoneName, zoneData.domainInfo, rrsets.array_items(), skippedRrsets, resp);
 }
 
 static void apiServerZoneDetailGET(HttpRequest* req, HttpResponse* resp)
@@ -2557,6 +2565,35 @@ static void parseRecordNameAndType(const Json& rrset, DNSName& qname, QType& qty
   }
 }
 
+static int rrsetVersionFromJson(const Json& rrset)
+{
+  try {
+    const int v = intFromJson(rrset, "version");
+    if (v < 0) {
+      throw ApiException("RRset \"version\" must be non-negative");
+    }
+    return v;
+  }
+  catch (const JsonException& e) {
+    throw ApiException(string("RRset \"version\": ") + e.what());
+  }
+}
+
+static int getBackendRrsetVersion(DomainInfo& domainInfo, const DNSName& qname, const QType& qtype)
+{
+  domainInfo.backend->APILookup(qtype, qname, static_cast<int>(domainInfo.id), true);
+  DNSResourceRecord rr;
+  int version{0};
+  bool any{false};
+  while (domainInfo.backend->get(rr)) {
+    if (!any) {
+      version = rr.rrset_version;
+      any = true;
+    }
+  }
+  return any ? version : 0;
+}
+
 // The return value of the apply* functions below
 enum applyResult
 {
@@ -2715,7 +2752,7 @@ static applyResult applyPruneOrExtend(const DomainInfo& domainInfo, const ZoneNa
   return SUCCESS;
 }
 
-static void patchZone(UeberBackend& backend, const ZoneName& zonename, DomainInfo& domainInfo, const vector<Json>& rrsets, HttpResponse* resp)
+static void patchZone(UeberBackend& backend, const ZoneName& zonename, DomainInfo& domainInfo, const vector<Json>& rrsets, Json::array& skippedRrsets, HttpResponse* resp)
 {
   bool madeAnyChanges{false};
   domainInfo.backend->startTransaction(zonename);
@@ -2789,6 +2826,13 @@ static void patchZone(UeberBackend& backend, const ZoneName& zonename, DomainInf
       DNSName qname;
       QType qtype;
       parseRecordNameAndType(container, qname, qtype);
+
+      const int clientVersion = rrsetVersionFromJson(container);
+      const int backendVersion = getBackendRrsetVersion(domainInfo, qname, qtype);
+      if (clientVersion != backendVersion) {
+        skippedRrsets.push_back(container);
+        continue;
+      }
 
       key currentKey{qname, qtype};
       bool cacheNeeded{false};
@@ -2879,8 +2923,14 @@ static void patchZone(UeberBackend& backend, const ZoneName& zonename, DomainInf
     domainInfo.backend->abortTransaction();
   }
 
-  resp->body = "";
-  resp->status = 204; // No Content, but indicate success
+  if (!skippedRrsets.empty()) {
+    resp->setJsonBody(Json::object{{"rrsets", skippedRrsets}});
+    resp->status = 200;
+  }
+  else {
+    resp->body = "";
+    resp->status = 204; // No Content, but indicate success
+  }
 }
 
 static void apiServerSearchData(HttpRequest* req, HttpResponse* resp)

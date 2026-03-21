@@ -27,6 +27,7 @@ CREATE TABLE records (
   disabled              BOOLEAN DEFAULT 0,
   ordername             VARCHAR(255),
   auth                  BOOL DEFAULT 1,
+  version               INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 

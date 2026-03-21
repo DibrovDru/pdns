@@ -87,18 +87,18 @@ public:
 
     declare(suffix, "dnssec", "Enable DNSSEC processing", "no");
 
-    string record_query = "SELECT content,ttl,prio,type,domain_id,disabled,name,auth FROM records WHERE";
+    string record_query = "SELECT records.content, records.ttl, records.prio, records.type, records.domain_id, records.disabled, records.name, records.auth, COALESCE(records.version,0) FROM records WHERE ";
 
-    declare(suffix, "basic-query", "Basic query", record_query + " disabled=0 and type=:qtype and name=:qname");
-    declare(suffix, "id-query", "Basic with ID query", record_query + " disabled=0 and type=:qtype and name=:qname and domain_id=:domain_id");
-    declare(suffix, "any-query", "Any query", record_query + " disabled=0 and name=:qname");
-    declare(suffix, "any-id-query", "Any with ID query", record_query + " disabled=0 and name=:qname and domain_id=:domain_id");
+    declare(suffix, "basic-query", "Basic query", record_query + "records.disabled=0 and records.type=:qtype and records.name=:qname");
+    declare(suffix, "id-query", "Basic with ID query", record_query + "records.disabled=0 and records.type=:qtype and records.name=:qname and records.domain_id=:domain_id");
+    declare(suffix, "any-query", "Any query", record_query + "records.disabled=0 and records.name=:qname");
+    declare(suffix, "any-id-query", "Any with ID query", record_query + "records.disabled=0 and records.name=:qname and records.domain_id=:domain_id");
 
-    declare(suffix, "api-id-query", "API basic with ID query", record_query + " (disabled=0 or :include_disabled) and type=:qtype and name=:qname and domain_id=:domain_id");
-    declare(suffix, "api-any-id-query", "API any with ID query", record_query + " (disabled=0 or :include_disabled) and name=:qname and domain_id=:domain_id");
+    declare(suffix, "api-id-query", "API basic with ID query", record_query + "(records.disabled=0 or :include_disabled) and records.type=:qtype and records.name=:qname and records.domain_id=:domain_id");
+    declare(suffix, "api-any-id-query", "API any with ID query", record_query + "(records.disabled=0 or :include_disabled) and records.name=:qname and records.domain_id=:domain_id");
 
-    declare(suffix, "list-query", "AXFR query", "SELECT content,ttl,prio,type,domain_id,disabled,name,auth,ordername FROM records WHERE (disabled=0 OR :include_disabled) and domain_id=:domain_id order by name, type");
-    declare(suffix, "list-subzone-query", "Subzone listing", record_query + " disabled=0 and (name=:zone OR name like :wildzone) and domain_id=:domain_id");
+    declare(suffix, "list-query", "AXFR query", "SELECT records.content, records.ttl, records.prio, records.type, records.domain_id, records.disabled, records.name, records.auth, records.ordername, COALESCE(records.version,0) FROM records WHERE (records.disabled=0 OR :include_disabled) and records.domain_id=:domain_id order by records.name, records.type");
+    declare(suffix, "list-subzone-query", "Subzone listing", record_query + "records.disabled=0 and (records.name=:zone OR records.name like :wildzone) and records.domain_id=:domain_id");
 
     declare(suffix, "remove-empty-non-terminals-from-zone-query", "remove all empty non-terminals from zone", "delete from records where domain_id=:domain_id and type is null");
     declare(suffix, "delete-empty-non-terminal-query", "delete empty non-terminal from zone", "delete from records where domain_id=:domain_id and name=:qname and type is null");
@@ -114,8 +114,8 @@ public:
 
     declare(suffix, "insert-zone-query", "", "insert into domains (type,name,master,account,last_check,notified_serial) values(:type, :domain, :primaries, :account, null, null)");
 
-    declare(suffix, "insert-record-query", "", "insert into records (content,ttl,prio,type,domain_id,disabled,name,ordername,auth) values (:content,:ttl,:priority,:qtype,:domain_id,:disabled,:qname,:ordername,:auth)");
-    declare(suffix, "insert-empty-non-terminal-order-query", "insert empty non-terminal in zone", "insert into records (type,domain_id,disabled,name,ordername,auth,ttl,prio,content) values (null,:domain_id,0,:qname,:ordername,:auth,null,null,null)");
+    declare(suffix, "insert-record-query", "", "insert into records (content,ttl,prio,type,domain_id,disabled,name,ordername,auth,version) values (:content,:ttl,:priority,:qtype,:domain_id,:disabled,:qname,:ordername,:auth,:version)");
+    declare(suffix, "insert-empty-non-terminal-order-query", "insert empty non-terminal in zone", "insert into records (type,domain_id,disabled,name,ordername,auth,ttl,prio,content,version) values (null,:domain_id,0,:qname,:ordername,:auth,null,null,null,0)");
 
     declare(suffix, "get-order-first-query", "DNSSEC Ordering Query, first", "select ordername from records where disabled=0 and domain_id=:domain_id and ordername is not null order by 1 asc limit 1");
     declare(suffix, "get-order-before-query", "DNSSEC Ordering Query, before", "select ordername, name from records where disabled=0 and ordername <= :ordername and domain_id=:domain_id and ordername is not null order by 1 desc limit 1");
@@ -167,8 +167,10 @@ public:
     declare(suffix, "insert-comment-query", "", "INSERT INTO comments (domain_id, name, type, modified_at, account, comment) VALUES (:domain_id, :qname, :qtype, :modified_at, :account, :content)");
     declare(suffix, "delete-comment-rrset-query", "", "DELETE FROM comments WHERE domain_id=:domain_id AND name=:qname AND type=:qtype");
     declare(suffix, "delete-comments-query", "", "DELETE FROM comments WHERE domain_id=:domain_id");
-    declare(suffix, "search-records-query", "", record_query + " name LIKE :value ESCAPE '\\' OR content LIKE :value2 ESCAPE '\\' LIMIT :limit");
+    declare(suffix, "search-records-query", "", record_query + "records.name LIKE :value ESCAPE '\\' OR records.content LIKE :value2 ESCAPE '\\' LIMIT :limit");
     declare(suffix, "search-comments-query", "", "SELECT domain_id,name,type,modified_at,account,comment FROM comments WHERE name LIKE :value ESCAPE '\\' OR comment LIKE :value2 ESCAPE '\\' LIMIT :limit");
+
+    declare(suffix, "get-rrset-version-query", "", "SELECT COALESCE(MAX(version),0) FROM records WHERE domain_id=:domain_id AND name=:qname AND type=:qtype");
   }
 
   //! Constructs a new gSQLite3Backend object.

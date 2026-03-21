@@ -22,6 +22,7 @@
 #pragma once
 #include "qtype.hh"
 #include "dnsname.hh"
+#include <cstdint>
 #include <ctime>
 #include <optional>
 #include <string_view>
@@ -97,6 +98,7 @@ public:
   uint32_t signttl{}; //!< If non-zero, use this TTL as original TTL in the RRSIG
 
   domainid_t domain_id{UnknownDomainID}; //!< If a backend implements this, the domain_id of the zone this record is in
+  int rrset_version{}; //!< Per-RRset version when provided by the backend (e.g. GSQL); otherwise 0
   QType qtype; //!< qtype of this record, ie A, CNAME, MX etc
   uint16_t qclass{1}; //!< class of this record
 

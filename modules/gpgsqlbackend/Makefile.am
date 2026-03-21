@@ -14,7 +14,8 @@ dist_doc_DATA = \
 	3.4.0_to_4.1.0_schema.pgsql.sql \
 	4.1.0_to_4.2.0_schema.pgsql.sql \
 	4.2.0_to_4.3.0_schema.pgsql.sql \
-	4.3.0_to_4.7.0_schema.pgsql.sql
+	4.3.0_to_4.7.0_schema.pgsql.sql \
+	4.7.0_to_4.8.0_schema_rrset.pgsql.sql
 
 libgpgsqlbackend_la_SOURCES = \
 	gpgsqlbackend.cc gpgsqlbackend.hh \

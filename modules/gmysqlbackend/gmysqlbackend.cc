@@ -95,18 +95,18 @@ public:
 
     declare(suffix, "dnssec", "Enable DNSSEC processing", "no");
 
-    string record_query = "SELECT content,ttl,prio,type,domain_id,disabled,name,auth FROM records WHERE";
+    string record_query = "SELECT records.content, records.ttl, records.prio, records.type, records.domain_id, records.disabled, records.name, records.auth, COALESCE(records.version,0) FROM records WHERE ";
 
-    declare(suffix, "basic-query", "Basic query", record_query + " disabled=0 and type=? and name=?");
-    declare(suffix, "id-query", "Basic with ID query", record_query + " disabled=0 and type=? and name=? and domain_id=?");
-    declare(suffix, "any-query", "Any query", record_query + " disabled=0 and name=?");
-    declare(suffix, "any-id-query", "Any with ID query", record_query + " disabled=0 and name=? and domain_id=?");
+    declare(suffix, "basic-query", "Basic query", record_query + "records.disabled=0 and records.type=? and records.name=?");
+    declare(suffix, "id-query", "Basic with ID query", record_query + "records.disabled=0 and records.type=? and records.name=? and records.domain_id=?");
+    declare(suffix, "any-query", "Any query", record_query + "records.disabled=0 and records.name=?");
+    declare(suffix, "any-id-query", "Any with ID query", record_query + "records.disabled=0 and records.name=? and records.domain_id=?");
 
-    declare(suffix, "api-id-query", "API basic with ID query", record_query + " (disabled=0 or ?) and type=? and name=? and domain_id=?");
-    declare(suffix, "api-any-id-query", "API any with ID query", record_query + " (disabled=0 or ?) and name=? and domain_id=?");
+    declare(suffix, "api-id-query", "API basic with ID query", record_query + "(records.disabled=0 or ?) and records.type=? and records.name=? and records.domain_id=?");
+    declare(suffix, "api-any-id-query", "API any with ID query", record_query + "(records.disabled=0 or ?) and records.name=? and records.domain_id=?");
 
-    declare(suffix, "list-query", "AXFR query", "SELECT content,ttl,prio,type,domain_id,disabled,name,auth,ordername FROM records WHERE (disabled=0 OR ?) and domain_id=? order by name, type");
-    declare(suffix, "list-subzone-query", "Subzone listing", record_query + " disabled=0 and (name=? OR name like ?) and domain_id=?");
+    declare(suffix, "list-query", "AXFR query", "SELECT records.content, records.ttl, records.prio, records.type, records.domain_id, records.disabled, records.name, records.auth, records.ordername, COALESCE(records.version,0) FROM records WHERE (records.disabled=0 OR ?) and records.domain_id=? order by records.name, records.type");
+    declare(suffix, "list-subzone-query", "Subzone listing", record_query + "records.disabled=0 and (records.name=? OR records.name like ?) and records.domain_id=?");
 
     declare(suffix, "remove-empty-non-terminals-from-zone-query", "remove all empty non-terminals from zone", "delete from records where domain_id=? and type is null");
     declare(suffix, "delete-empty-non-terminal-query", "delete empty non-terminal from zone", "delete from records where domain_id=? and name=? and type is null");
@@ -122,8 +122,8 @@ public:
 
     declare(suffix, "insert-zone-query", "", "insert into domains (type,name,master,account,last_check,notified_serial) values(?,?,?,?,NULL,NULL)");
 
-    declare(suffix, "insert-record-query", "", "insert into records (content,ttl,prio,type,domain_id,disabled,name,ordername,auth) values (?,?,?,?,?,?,?,?,?)");
-    declare(suffix, "insert-empty-non-terminal-order-query", "insert empty non-terminal in zone", "insert into records (type,domain_id,disabled,name,ordername,auth,content,ttl,prio) values (null,?,0,?,?,?,NULL,NULL,NULL)");
+    declare(suffix, "insert-record-query", "", "insert into records (content,ttl,prio,type,domain_id,disabled,name,ordername,auth,version) values (?,?,?,?,?,?,?,?,?,?)");
+    declare(suffix, "insert-empty-non-terminal-order-query", "insert empty non-terminal in zone", "insert into records (type,domain_id,disabled,name,ordername,auth,content,ttl,prio,version) values (null,?,0,?,?,?,NULL,NULL,NULL,0)");
 
     declare(suffix, "get-order-first-query", "DNSSEC Ordering Query, first", "select ordername from records where domain_id=? and disabled=0 and ordername is not null order by 1 asc limit 1");
     declare(suffix, "get-order-before-query", "DNSSEC Ordering Query, before", "select ordername, name from records where ordername <= ? and domain_id=? and disabled=0 and ordername is not null order by 1 desc limit 1");
@@ -175,8 +175,10 @@ public:
     declare(suffix, "insert-comment-query", "", "INSERT INTO comments (domain_id, name, type, modified_at, account, comment) VALUES (?, ?, ?, ?, ?, ?)");
     declare(suffix, "delete-comment-rrset-query", "", "DELETE FROM comments WHERE domain_id=? AND name=? AND type=?");
     declare(suffix, "delete-comments-query", "", "DELETE FROM comments WHERE domain_id=?");
-    declare(suffix, "search-records-query", "", record_query + " name LIKE ? OR content LIKE ? LIMIT ?");
+    declare(suffix, "search-records-query", "", record_query + "records.name LIKE ? OR records.content LIKE ? LIMIT ?");
     declare(suffix, "search-comments-query", "", "SELECT domain_id,name,type,modified_at,account,comment FROM comments WHERE name LIKE ? OR comment LIKE ? LIMIT ?");
+
+    declare(suffix, "get-rrset-version-query", "", "SELECT COALESCE(MAX(version),0) FROM records WHERE domain_id=? AND name=? AND type=?");
   }
 
   DNSBackend* make(const string& suffix = "") override

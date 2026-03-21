@@ -102,18 +102,18 @@ public:
 
     declare(suffix, "dnssec", "Enable DNSSEC processing", "no");
 
-    string record_query = "SELECT content,ttl,prio,type,domain_id,disabled::int,name,auth::int FROM records WHERE";
+    string record_query = "SELECT records.content, records.ttl, records.prio, records.type, records.domain_id, records.disabled::int, records.name, records.auth::int, COALESCE(records.version,0)::bigint FROM records WHERE ";
 
-    declare(suffix, "basic-query", "Basic query", record_query + " disabled=false and type=$1 and name=$2");
-    declare(suffix, "id-query", "Basic with ID query", record_query + " disabled=false and type=$1 and name=$2 and domain_id=$3");
-    declare(suffix, "any-query", "Any query", record_query + " disabled=false and name=$1");
-    declare(suffix, "any-id-query", "Any with ID query", record_query + " disabled=false and name=$1 and domain_id=$2");
+    declare(suffix, "basic-query", "Basic query", record_query + "records.disabled=false and records.type=$1 and records.name=$2");
+    declare(suffix, "id-query", "Basic with ID query", record_query + "records.disabled=false and records.type=$1 and records.name=$2 and records.domain_id=$3");
+    declare(suffix, "any-query", "Any query", record_query + "records.disabled=false and records.name=$1");
+    declare(suffix, "any-id-query", "Any with ID query", record_query + "records.disabled=false and records.name=$1 and records.domain_id=$2");
 
-    declare(suffix, "api-id-query", "API basic with ID query", record_query + " (disabled=false or $1) and type=$2 and name=$3 and domain_id=$4");
-    declare(suffix, "api-any-id-query", "API any with ID query", record_query + " (disabled=false or $1) and name=$2 and domain_id=$3");
+    declare(suffix, "api-id-query", "API basic with ID query", record_query + "(records.disabled=false or $1) and records.type=$2 and records.name=$3 and records.domain_id=$4");
+    declare(suffix, "api-any-id-query", "API any with ID query", record_query + "(records.disabled=false or $1) and records.name=$2 and records.domain_id=$3");
 
-    declare(suffix, "list-query", "AXFR query", "SELECT content,ttl,prio,type,domain_id,disabled::int,name,auth::int,ordername FROM records WHERE (disabled=false OR $1) and domain_id=$2 order by name, type");
-    declare(suffix, "list-subzone-query", "Subzone listing", record_query + " disabled=false and (name=$1 OR name like $2) and domain_id=$3");
+    declare(suffix, "list-query", "AXFR query", "SELECT records.content, records.ttl, records.prio, records.type, records.domain_id, records.disabled::int, records.name, records.auth::int, records.ordername, COALESCE(records.version,0)::bigint FROM records WHERE (records.disabled=false OR $1) and records.domain_id=$2 order by records.name, records.type");
+    declare(suffix, "list-subzone-query", "Subzone listing", record_query + "records.disabled=false and (records.name=$1 OR records.name like $2) and records.domain_id=$3");
 
     declare(suffix, "remove-empty-non-terminals-from-zone-query", "remove all empty non-terminals from zone", "delete from records where domain_id=$1 and type is null");
     declare(suffix, "delete-empty-non-terminal-query", "delete empty non-terminal from zone", "delete from records where domain_id=$1 and name=$2 and type is null");
@@ -129,8 +129,8 @@ public:
 
     declare(suffix, "insert-zone-query", "", "insert into domains (type,name,master,account,last_check, notified_serial) values($1,$2,$3,$4,null,null)");
 
-    declare(suffix, "insert-record-query", "", "insert into records (content,ttl,prio,type,domain_id,disabled,name,ordername,auth) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)");
-    declare(suffix, "insert-empty-non-terminal-order-query", "insert empty non-terminal in zone", "insert into records (type,domain_id,disabled,name,ordername,auth,ttl,prio,content) values (null,$1,false,$2,$3,$4,null,null,null)");
+    declare(suffix, "insert-record-query", "", "insert into records (content,ttl,prio,type,domain_id,disabled,name,ordername,auth,version) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)");
+    declare(suffix, "insert-empty-non-terminal-order-query", "insert empty non-terminal in zone", "insert into records (type,domain_id,disabled,name,ordername,auth,ttl,prio,content,version) values (null,$1,false,$2,$3,$4,null,null,null,0)");
 
     declare(suffix, "get-order-first-query", "DNSSEC Ordering Query, first", "select ordername from records where disabled=false and domain_id=$1 and ordername is not null order by 1 using ~<~ limit 1");
     declare(suffix, "get-order-before-query", "DNSSEC Ordering Query, before", "select ordername, name from records where disabled=false and ordername ~<=~ $1 and domain_id=$2 and ordername is not null order by 1 using ~>~ limit 1");
@@ -182,8 +182,10 @@ public:
     declare(suffix, "insert-comment-query", "", "INSERT INTO comments (domain_id, name, type, modified_at, account, comment) VALUES ($1, $2, $3, $4, $5, $6)");
     declare(suffix, "delete-comment-rrset-query", "", "DELETE FROM comments WHERE domain_id=$1 AND name=$2 AND type=$3");
     declare(suffix, "delete-comments-query", "", "DELETE FROM comments WHERE domain_id=$1");
-    declare(suffix, "search-records-query", "", record_query + " name ILIKE $1 OR content ILIKE $2 LIMIT $3");
+    declare(suffix, "search-records-query", "", record_query + "records.name ILIKE $1 OR records.content ILIKE $2 LIMIT $3");
     declare(suffix, "search-comments-query", "", "SELECT domain_id,name,type,modified_at,account,comment FROM comments WHERE name ILIKE $1 OR comment ILIKE $2 LIMIT $3");
+
+    declare(suffix, "get-rrset-version-query", "", "SELECT COALESCE(MAX(version),0) FROM records WHERE domain_id=$1 AND name=$2 AND type=$3");
   }
 
   DNSBackend* make(const string& suffix = "") override
