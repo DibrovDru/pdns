@@ -38,6 +38,7 @@
 #include "arguments.hh"
 #include "dns.hh"
 #include "comment.hh"
+#include "redisclient.hh"
 #include "ueberbackend.hh"
 #include <boost/format.hpp>
 
@@ -2385,6 +2386,56 @@ static void apiServerZoneDetailDELETE(HttpRequest* req, HttpResponse* resp)
 static void apiServerZoneDetailPATCH(HttpRequest* req, HttpResponse* resp)
 {
   ZoneData zoneData{req};
+
+  const auto idempIt = req->headers.find("idempotency-key");
+  if (idempIt == req->headers.end() || idempIt->second.empty()) {
+    throw ApiException("Missing required header: Idempotency-Key");
+  }
+  const std::string idempotencyKey = idempIt->second;
+
+  RedisClient redis(getRedisSettingsFromArgs());
+  if (!redis.enabled()) {
+    throw ApiException("Redis is required for this endpoint: set redis-enabled=yes");
+  }
+
+  const std::string redisKey = idempotencyKey;
+  static const std::string inProgressMarker{"__PDNS_IDEMP_IN_PROGRESS__"};
+
+  auto replayIfPresent = [&]() -> bool {
+    const auto stored = redis.get(redisKey);
+    if (!stored) {
+      return false;
+    }
+    if (*stored == inProgressMarker) {
+      return false;
+    }
+    std::string err;
+    const auto parsed = Json::parse(*stored, err);
+    if (!err.empty() || !parsed.is_object()) {
+      return false;
+    }
+    resp->status = intFromJson(parsed, "status");
+    resp->body = stringFromJson(parsed, "body");
+    const auto& ct = parsed["content_type"];
+    if (ct.is_string() && !ct.string_value().empty()) {
+      resp->headers["Content-Type"] = ct.string_value();
+    }
+    return true;
+  };
+
+  if (replayIfPresent()) {
+    return;
+  }
+
+  const bool haveLock = redis.setNxEx(redisKey, inProgressMarker, 60);
+  if (!haveLock) {
+    if (replayIfPresent()) {
+      return;
+    }
+    resp->setErrorResult("Idempotency-Key is already being processed", 409);
+    return;
+  }
+
   Json document = req->json();
 
   auto rrsets = document["rrsets"];
@@ -2392,8 +2443,30 @@ static void apiServerZoneDetailPATCH(HttpRequest* req, HttpResponse* resp)
     throw ApiException("No rrsets given in update request");
   }
 
-  Json::array skippedRrsets;
-  patchZone(zoneData.backend, zoneData.zoneName, zoneData.domainInfo, rrsets.array_items(), skippedRrsets, resp);
+  try {
+    Json::array skippedRrsets;
+    patchZone(zoneData.backend, zoneData.zoneName, zoneData.domainInfo, rrsets.array_items(), skippedRrsets, resp);
+
+    if (resp->status == 200 || resp->status == 204) {
+      std::string contentType;
+      if (const auto ctIt = resp->headers.find("Content-Type"); ctIt != resp->headers.end()) {
+        contentType = ctIt->second;
+      }
+      Json::object payload{
+        {"status", resp->status},
+        {"body", resp->body},
+        {"content_type", contentType},
+      };
+      (void)redis.set(redisKey, Json(payload).dump(), 60);
+    }
+    else {
+      (void)redis.del(redisKey);
+    }
+  }
+  catch (...) {
+    (void)redis.del(redisKey);
+    throw;
+  }
 }
 
 static void apiServerZoneDetailGET(HttpRequest* req, HttpResponse* resp)

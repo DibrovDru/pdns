@@ -3,6 +3,7 @@ ARC4RANDOM_LIBS = $(top_builddir)/ext/arc4random/libarc4random.la
 
 AM_CPPFLAGS += \
 	-I$(top_srcdir)/ext/json11 \
+	-I$(top_srcdir)/ext/redis-cpp/include \
 	$(YAHTTP_CFLAGS) \
 	$(LIBEDIT_CFLAGS) \
 	$(LIBCRYPTO_INCLUDES) \
@@ -261,6 +262,7 @@ pdns_server_SOURCES = \
 	qtype.cc qtype.hh \
 	query-local-address.hh query-local-address.cc \
 	rcpgenerator.cc \
+	redisclient.cc redisclient.hh \
 	resolver.cc resolver.hh \
 	responsestats.cc responsestats.hh responsestats-auth.cc \
 	rfc2136handler.cc \

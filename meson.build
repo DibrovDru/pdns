@@ -88,7 +88,7 @@ fs = import('fs')
 src_dir = fs.is_dir('pdns') ? 'pdns' : ''
 docs_dir = 'docs'
 # Toplevel includes
-dep_pdns = declare_dependency(include_directories: include_directories('.', src_dir))
+dep_pdns = declare_dependency(include_directories: include_directories('.', src_dir, 'ext' / 'redis-cpp' / 'include'))
 
 # Ext
 subdir('ext' / 'arc4random')
@@ -595,6 +595,8 @@ common_sources += files(
   src_dir / 'rcpgenerator.hh',
   src_dir / 'resolver.cc',
   src_dir / 'resolver.hh',
+  src_dir / 'redisclient.cc',
+  src_dir / 'redisclient.hh',
   src_dir / 'responsestats-auth.cc',
   src_dir / 'responsestats.cc',
   src_dir / 'responsestats.hh',

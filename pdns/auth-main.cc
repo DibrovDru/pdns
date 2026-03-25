@@ -252,6 +252,12 @@ static void declareArguments()
   ::arg().set("webserver-connection-timeout", "Webserver/API request/response timeout in seconds") = "5";
   ::arg().setSwitch("webserver-hash-plaintext-credentials", "Whether to hash passwords and api keys supplied in plaintext, to prevent keeping the plaintext version in memory at runtime") = "no";
 
+  ::arg().setSwitch("redis-enabled", "Enable Redis client support for optional optimistic-lock workflows") = "no";
+  ::arg().set("redis-host", "Redis server host") = "127.0.0.1";
+  ::arg().set("redis-port", "Redis server port") = "6379";
+  ::arg().set("redis-password", "Redis AUTH password") = "";
+  ::arg().set("redis-db", "Redis logical database number") = "0";
+
   ::arg().setSwitch("query-logging", "Hint backends that queries should be logged") = "no";
 
   ::arg().set("carbon-namespace", "If set overwrites the first part of the carbon string") = "pdns";
