@@ -32,6 +32,7 @@
 #include "ws-auth.hh"
 #include "json.hh"
 #include "logger.hh"
+#include "logging.hh"
 #include "statbag.hh"
 #include "misc.hh"
 #include "base64.hh"
@@ -55,6 +56,7 @@
 #include "threadname.hh"
 #include "tsigutils.hh"
 #include "check-zone.hh"
+#include <functional>
 
 using json11::Json;
 
@@ -1484,6 +1486,124 @@ static void apiZoneCryptokeysPostProcessing(ZoneData& zoneData, Logr::log_t slog
   }
 }
 
+static const std::string s_idempotencyInProgress{"__PDNS_IDEMP_IN_PROGRESS__"};
+
+static void logRedisIdempotencySet(HttpResponse* resp, bool ok, const std::string& redisKey)
+{
+  if (resp == nullptr || !resp->d_slog) {
+    return;
+  }
+  if (ok) {
+    resp->d_slog->info(Logr::Info, "Redis idempotency: cached response stored", "key", Logging::Loggable(redisKey));
+  }
+  else {
+    resp->d_slog->info(Logr::Warning, "Redis idempotency: failed to store cached response", "key", Logging::Loggable(redisKey));
+  }
+}
+
+static void logRedisIdempotencyDel(HttpResponse* resp, const std::string& context, bool keyRemoved, const std::string& redisKey)
+{
+  if (resp == nullptr || !resp->d_slog) {
+    return;
+  }
+  if (keyRemoved) {
+    resp->d_slog->info(Logr::Info, "Redis idempotency: lock key removed", "context", Logging::Loggable(context), "key", Logging::Loggable(redisKey));
+  }
+  else {
+    resp->d_slog->info(Logr::Info, "Redis idempotency: DEL had no effect (key already absent)", "context", Logging::Loggable(context), "key", Logging::Loggable(redisKey));
+  }
+}
+
+static bool idempotencyTryReplay(RedisClient& redis, const std::string& redisKey, HttpResponse* resp)
+{
+  const auto stored = redis.get(redisKey);
+  if (!stored) {
+    return false;
+  }
+  if (*stored == s_idempotencyInProgress) {
+    return false;
+  }
+  std::string err;
+  const auto parsed = Json::parse(*stored, err);
+  if (!err.empty() || !parsed.is_object()) {
+    return false;
+  }
+  resp->status = intFromJson(parsed, "status");
+  resp->body = stringFromJson(parsed, "body");
+  const auto& hdrs = parsed["headers"];
+  if (hdrs.is_object()) {
+    for (const auto& item : hdrs.object_items()) {
+      if (item.second.is_string()) {
+        resp->headers[item.first] = item.second.string_value();
+      }
+    }
+  }
+  else {
+    const auto& ct = parsed["content_type"];
+    if (ct.is_string() && !ct.string_value().empty()) {
+      resp->headers["Content-Type"] = ct.string_value();
+    }
+  }
+  return true;
+}
+
+static void idempotencyPersistSuccess(RedisClient& redis, const std::string& redisKey, HttpResponse* resp)
+{
+  Json::object hdrObj;
+  for (const auto& header : resp->headers) {
+    hdrObj[header.first] = header.second;
+  }
+  Json::object payload{
+    {"status", resp->status},
+    {"body", resp->body},
+    {"headers", Json(hdrObj)},
+  };
+  const bool storedOk = redis.set(redisKey, Json(payload).dump(), 60);
+  logRedisIdempotencySet(resp, storedOk, redisKey);
+}
+
+static void runApiWithIdempotency(HttpRequest* req, HttpResponse* resp, const std::function<void()>& handler)
+{
+  const auto idempIt = req->headers.find("idempotency-key");
+  if (idempIt == req->headers.end() || idempIt->second.empty()) {
+    throw ApiException("Missing required header: Idempotency-Key");
+  }
+  const std::string redisKey = idempIt->second;
+
+  RedisClient redis(getRedisSettingsFromArgs());
+  if (!redis.enabled()) {
+    throw ApiException("Redis is required for this endpoint: set redis-enabled=yes");
+  }
+
+  if (idempotencyTryReplay(redis, redisKey, resp)) {
+    return;
+  }
+
+  if (!redis.setNxEx(redisKey, s_idempotencyInProgress, 60)) {
+    if (idempotencyTryReplay(redis, redisKey, resp)) {
+      return;
+    }
+    resp->setErrorResult("Idempotency-Key is already being processed", 409);
+    return;
+  }
+
+  try {
+    handler();
+    if (resp->status == 200 || resp->status == 201 || resp->status == 204) {
+      idempotencyPersistSuccess(redis, redisKey, resp);
+    }
+    else {
+      const bool removed = redis.del(redisKey);
+      logRedisIdempotencyDel(resp, "non-success HTTP status", removed, redisKey);
+    }
+  }
+  catch (...) {
+    const bool removed = redis.del(redisKey);
+    logRedisIdempotencyDel(resp, "after exception", removed, redisKey);
+    throw;
+  }
+}
+
 /*
  * This method handles DELETE requests for URL /api/v1/servers/:server_id/zones/:zone_name/cryptokeys/:cryptokey_id .
  * It deletes a key from :zone_name specified by :cryptokey_id.
@@ -1497,6 +1617,7 @@ static void apiZoneCryptokeysPostProcessing(ZoneData& zoneData, Logr::log_t slog
  * */
 static void apiZoneCryptokeysDELETE(HttpRequest* req, HttpResponse* resp)
 {
+  runApiWithIdempotency(req, resp, [&]() {
   ZoneData zoneData{req};
   const auto inquireKeyId = getInquireKeyId(req, zoneData.zoneName, &zoneData.dnssecKeeper);
 
@@ -1512,6 +1633,7 @@ static void apiZoneCryptokeysDELETE(HttpRequest* req, HttpResponse* resp)
   else {
     resp->setErrorResult("Could not DELETE " + req->parameters["key_id"], 422);
   }
+  });
 }
 
 /*
@@ -1552,6 +1674,7 @@ static void apiZoneCryptokeysDELETE(HttpRequest* req, HttpResponse* resp)
 
 static void apiZoneCryptokeysPOST(HttpRequest* req, HttpResponse* resp)
 {
+  runApiWithIdempotency(req, resp, [&]() {
   ZoneData zoneData{req};
 
   const auto& document = req->json();
@@ -1657,6 +1780,7 @@ static void apiZoneCryptokeysPOST(HttpRequest* req, HttpResponse* resp)
   apiZoneCryptokeysPostProcessing(zoneData, resp->d_slog);
   apiZoneCryptokeysExport(zoneData.zoneName, insertedId, resp, &zoneData.dnssecKeeper);
   resp->status = 201;
+  });
 }
 
 /*
@@ -1672,6 +1796,7 @@ static void apiZoneCryptokeysPOST(HttpRequest* req, HttpResponse* resp)
  * */
 static void apiZoneCryptokeysPUT(HttpRequest* req, HttpResponse* resp)
 {
+  runApiWithIdempotency(req, resp, [&]() {
   ZoneData zoneData{req};
   const auto inquireKeyId = getInquireKeyId(req, zoneData.zoneName, &zoneData.dnssecKeeper);
 
@@ -1712,6 +1837,7 @@ static void apiZoneCryptokeysPUT(HttpRequest* req, HttpResponse* resp)
   apiZoneCryptokeysPostProcessing(zoneData, resp->d_slog);
   resp->body = "";
   resp->status = 204;
+  });
 }
 
 static void gatherRecordsFromZone(const std::string& zonestring, vector<DNSResourceRecord>& new_records, const ZoneName& zonename)
@@ -2000,6 +2126,7 @@ static void apiServerAutoprimariesPOST(HttpRequest* req, HttpResponse* resp)
 // create new zone
 static void apiServerZonesPOST(HttpRequest* req, HttpResponse* resp)
 {
+  runApiWithIdempotency(req, resp, [&]() {
   UeberBackend backend;
   DNSSECKeeper dnssecKeeper(resp->d_slog, &backend);
   DomainInfo domainInfo;
@@ -2199,8 +2326,9 @@ static void apiServerZonesPOST(HttpRequest* req, HttpResponse* resp)
 
   g_zoneCache.add(zonename, static_cast<int>(domainInfo.id)); // make new zone visible
 
+  resp->status = 201; // set before fillZone so idempotency wrapper sees success status
   fillZone(backend, zonename, resp, req);
-  resp->status = 201;
+  });
 }
 
 // list known zones
@@ -2248,6 +2376,7 @@ static void apiServerZonesGET(HttpRequest* req, HttpResponse* resp)
 
 static void apiServerZoneDetailPUT(HttpRequest* req, HttpResponse* resp)
 {
+  runApiWithIdempotency(req, resp, [&]() {
   ZoneData zoneData{req};
 
   // update domain contents and/or settings
@@ -2351,10 +2480,12 @@ static void apiServerZoneDetailPUT(HttpRequest* req, HttpResponse* resp)
 
   resp->body = "";
   resp->status = 204; // No Content, but indicate success
+  });
 }
 
 static void apiServerZoneDetailDELETE(HttpRequest* req, HttpResponse* resp)
 {
+  runApiWithIdempotency(req, resp, [&]() {
   ZoneData zoneData{req};
 
   // delete domain
@@ -2381,92 +2512,24 @@ static void apiServerZoneDetailDELETE(HttpRequest* req, HttpResponse* resp)
   // empty body on success
   resp->body = "";
   resp->status = 204; // No Content: declare that the zone is gone now
+  });
 }
 
 static void apiServerZoneDetailPATCH(HttpRequest* req, HttpResponse* resp)
 {
-  ZoneData zoneData{req};
+  runApiWithIdempotency(req, resp, [&]() {
+    ZoneData zoneData{req};
 
-  const auto idempIt = req->headers.find("idempotency-key");
-  if (idempIt == req->headers.end() || idempIt->second.empty()) {
-    throw ApiException("Missing required header: Idempotency-Key");
-  }
-  const std::string idempotencyKey = idempIt->second;
+    Json document = req->json();
 
-  RedisClient redis(getRedisSettingsFromArgs());
-  if (!redis.enabled()) {
-    throw ApiException("Redis is required for this endpoint: set redis-enabled=yes");
-  }
-
-  const std::string redisKey = idempotencyKey;
-  static const std::string inProgressMarker{"__PDNS_IDEMP_IN_PROGRESS__"};
-
-  auto replayIfPresent = [&]() -> bool {
-    const auto stored = redis.get(redisKey);
-    if (!stored) {
-      return false;
+    auto rrsets = document["rrsets"];
+    if (!rrsets.is_array()) {
+      throw ApiException("No rrsets given in update request");
     }
-    if (*stored == inProgressMarker) {
-      return false;
-    }
-    std::string err;
-    const auto parsed = Json::parse(*stored, err);
-    if (!err.empty() || !parsed.is_object()) {
-      return false;
-    }
-    resp->status = intFromJson(parsed, "status");
-    resp->body = stringFromJson(parsed, "body");
-    const auto& ct = parsed["content_type"];
-    if (ct.is_string() && !ct.string_value().empty()) {
-      resp->headers["Content-Type"] = ct.string_value();
-    }
-    return true;
-  };
 
-  if (replayIfPresent()) {
-    return;
-  }
-
-  const bool haveLock = redis.setNxEx(redisKey, inProgressMarker, 60);
-  if (!haveLock) {
-    if (replayIfPresent()) {
-      return;
-    }
-    resp->setErrorResult("Idempotency-Key is already being processed", 409);
-    return;
-  }
-
-  Json document = req->json();
-
-  auto rrsets = document["rrsets"];
-  if (!rrsets.is_array()) {
-    throw ApiException("No rrsets given in update request");
-  }
-
-  try {
     Json::array skippedRrsets;
     patchZone(zoneData.backend, zoneData.zoneName, zoneData.domainInfo, rrsets.array_items(), skippedRrsets, resp);
-
-    if (resp->status == 200 || resp->status == 204) {
-      std::string contentType;
-      if (const auto ctIt = resp->headers.find("Content-Type"); ctIt != resp->headers.end()) {
-        contentType = ctIt->second;
-      }
-      Json::object payload{
-        {"status", resp->status},
-        {"body", resp->body},
-        {"content_type", contentType},
-      };
-      (void)redis.set(redisKey, Json(payload).dump(), 60);
-    }
-    else {
-      (void)redis.del(redisKey);
-    }
-  }
-  catch (...) {
-    (void)redis.del(redisKey);
-    throw;
-  }
+  });
 }
 
 static void apiServerZoneDetailGET(HttpRequest* req, HttpResponse* resp)
