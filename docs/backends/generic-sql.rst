@@ -301,9 +301,13 @@ Domain and zone manipulation
 -  ``insert-record-query``: Called during incoming AXFR.
 -  ``update-account-query``: Set the account for a domain.
 -  ``delete-names-query``: Called to delete all records of a certain
-   name.
+   name. The query must accept two extra parameters (repeated value
+   ``lock_lhs`` / ``lock_rhs`` in sqlite, two placeholders in other
+   dialects) implementing ``(lock = 0 OR version = lock)`` for optimistic
+   locking; when ``lock`` is 0, all rows at the name match (legacy clients).
 -  ``delete-rrset-query``: Called to delete an RRset based on
-   domain_id, name and type.
+   domain_id, name and type, plus the same two-parameter version guard as
+   ``delete-names-query``.
 
 -  ``get-all-domain-metadata-query``: Get all
    :doc:`domain metadata <../domainmetadata>` for a domain.

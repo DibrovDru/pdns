@@ -80,6 +80,7 @@ public:
   virtual SSqlStatement* getResult(result_t& result) = 0;
   virtual SSqlStatement* reset() = 0;
   virtual const std::string& getQuery() = 0;
+  virtual int64_t getRowsModified() { return -1; }
   virtual ~SSqlStatement();
 };
 

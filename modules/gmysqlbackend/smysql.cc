@@ -203,8 +203,14 @@ public:
     return this;
   }
 
+  int64_t getRowsModified() override
+  {
+    return d_rows_modified;
+  }
+
   SSqlStatement* execute() override
   {
+    d_rows_modified = -1;
     prepareStatement();
 
     if (!d_stmt)
@@ -270,6 +276,13 @@ public:
         string error(mysql_stmt_error(d_stmt));
         releaseStatement();
         throw SSqlException("Could not bind parameters to mysql statement: " + d_query + string(": ") + error);
+      }
+    }
+    else {
+      d_resnum = 0;
+      auto ar = mysql_stmt_affected_rows(d_stmt);
+      if (ar != static_cast<my_ulonglong>(-1)) {
+        d_rows_modified = static_cast<int64_t>(ar);
       }
     }
 
@@ -487,6 +500,7 @@ private:
   int d_fnum;
   int d_resnum;
   int d_residx;
+  int64_t d_rows_modified{-1};
 };
 
 void SMySQL::connect()

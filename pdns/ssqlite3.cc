@@ -160,9 +160,16 @@ public:
     return this;
   }
 
+  int64_t getRowsModified() override
+  {
+    return d_rows_modified;
+  }
+
   SSqlStatement* execute() override
   {
+    d_rows_modified = -1;
     prepareStatement();
+    const int ncol = sqlite3_column_count(d_stmt);
     if (d_dolog) {
       SLOG(g_log << Logger::Warning << "Query " << this << ": " << d_query << endl,
            d_slog->info(Logr::Warning, "execute sqlite3 query", "query", Logging::Loggable(d_query)));
@@ -181,6 +188,9 @@ public:
         throw SSqlException(string("CANTOPEN error in sqlite3, often caused by unwritable sqlite3 db *directory*: ") + SSQLite3ErrorString(d_db->db()));
       }
       throw SSqlException(string("Error while retrieving SQLite query results: ") + SSQLite3ErrorString(d_db->db()));
+    }
+    if (d_rc == SQLITE_DONE && ncol == 0) {
+      d_rows_modified = static_cast<int64_t>(sqlite3_changes(d_db->db()));
     }
     if (d_dolog) {
       SLOG(g_log << Logger::Warning << "Query " << this << ": " << d_dtime.udiffNoReset() << " us to execute" << endl,
@@ -257,6 +267,7 @@ private:
   int d_rc{0};
   bool d_dolog;
   bool d_prepared{false};
+  int64_t d_rows_modified{-1};
 
   void prepareStatement()
   {

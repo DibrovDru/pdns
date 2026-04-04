@@ -139,8 +139,8 @@ public:
     declare(suffix, "info-consumer-members-query", "", "select id, name, options, master from domains where type='SLAVE' and catalog=:catalog");
     declare(suffix, "delete-domain-query", "", "delete from domains where name=:domain");
     declare(suffix, "delete-zone-query", "", "delete from records where domain_id=:domain_id");
-    declare(suffix, "delete-rrset-query", "", "delete from records where domain_id=:domain_id and name=:qname and type=:qtype");
-    declare(suffix, "delete-names-query", "", "delete from records where domain_id=:domain_id and name=:qname");
+    declare(suffix, "delete-rrset-query", "", "delete from records where domain_id=:domain_id and name=:qname and type=:qtype and (:lock_lhs = 0 or version = :lock_rhs)");
+    declare(suffix, "delete-names-query", "", "delete from records where domain_id=:domain_id and name=:qname and (:lock_lhs = 0 or version = :lock_rhs)");
 
     declare(suffix, "add-domain-key-query", "", "insert into cryptokeys (domain_id, flags, active, published, content) select id, :flags, :active, :published, :content from domains where name=:domain");
     declare(suffix, "get-last-inserted-key-id-query", "", "select last_insert_rowid()");
@@ -169,8 +169,6 @@ public:
     declare(suffix, "delete-comments-query", "", "DELETE FROM comments WHERE domain_id=:domain_id");
     declare(suffix, "search-records-query", "", record_query + "records.name LIKE :value ESCAPE '\\' OR records.content LIKE :value2 ESCAPE '\\' LIMIT :limit");
     declare(suffix, "search-comments-query", "", "SELECT domain_id,name,type,modified_at,account,comment FROM comments WHERE name LIKE :value ESCAPE '\\' OR comment LIKE :value2 ESCAPE '\\' LIMIT :limit");
-
-    declare(suffix, "get-rrset-version-query", "", "SELECT COALESCE(MAX(version),0) FROM records WHERE domain_id=:domain_id AND name=:qname AND type=:qtype");
   }
 
   //! Constructs a new gSQLite3Backend object.

@@ -73,8 +73,14 @@ public:
     d_paridx++;
     return this;
   } // these are set null in allocate()
+  int64_t getRowsModified() override
+  {
+    return d_rows_modified;
+  }
+
   SSqlStatement* execute() override
   {
+    d_rows_modified = -1;
     prepareStatement();
     if (d_dolog) {
       if (g_slogStructured) {
@@ -126,6 +132,17 @@ public:
       string errmsg(PQresultErrorMessage(d_res_set));
       releaseStatement();
       throw SSqlException("Fatal error during query: " + d_query + string(": ") + errmsg);
+    }
+    if (status == PGRES_COMMAND_OK) {
+      char* ct = PQcmdTuples(d_res_set);
+      if (ct != nullptr && ct[0] != '\0') {
+        try {
+          d_rows_modified = static_cast<int64_t>(std::stoll(string(ct)));
+        }
+        catch (...) {
+          d_rows_modified = -1;
+        }
+      }
     }
     d_cur_set = 0;
     if (d_dolog) {
@@ -314,6 +331,7 @@ private:
   int d_resnum{0};
   int d_cur_set{0};
   unsigned int d_nstatement;
+  int64_t d_rows_modified{-1};
 };
 
 bool SPgSQL::s_dolog;

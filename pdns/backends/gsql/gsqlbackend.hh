@@ -86,8 +86,8 @@ protected:
       d_InfoConsumerMembersQuery_stmt = d_db->prepare(d_InfoConsumerMembersQuery, 1);
       d_DeleteDomainQuery_stmt = d_db->prepare(d_DeleteDomainQuery, 1);
       d_DeleteZoneQuery_stmt = d_db->prepare(d_DeleteZoneQuery, 1);
-      d_DeleteRRSetQuery_stmt = d_db->prepare(d_DeleteRRSetQuery, 3);
-      d_DeleteNamesQuery_stmt = d_db->prepare(d_DeleteNamesQuery, 2);
+      d_DeleteRRSetQuery_stmt = d_db->prepare(d_DeleteRRSetQuery, 5);
+      d_DeleteNamesQuery_stmt = d_db->prepare(d_DeleteNamesQuery, 4);
       d_firstOrderQuery_stmt = d_db->prepare(d_firstOrderQuery, 1);
       d_beforeOrderQuery_stmt = d_db->prepare(d_beforeOrderQuery, 2);
       d_afterOrderQuery_stmt = d_db->prepare(d_afterOrderQuery, 2);
@@ -123,7 +123,6 @@ protected:
       d_DeleteCommentsQuery_stmt = d_db->prepare(d_DeleteCommentsQuery, 1);
       d_SearchRecordsQuery_stmt = d_db->prepare(d_SearchRecordsQuery, 3);
       d_SearchCommentsQuery_stmt = d_db->prepare(d_SearchCommentsQuery, 3);
-      d_GetRRSetVersionQuery_stmt = d_db->prepare(d_GetRRSetVersionQuery, 3);
     }
   }
 
@@ -196,7 +195,6 @@ protected:
     d_DeleteCommentsQuery_stmt.reset();
     d_SearchRecordsQuery_stmt.reset();
     d_SearchCommentsQuery_stmt.reset();
-    d_GetRRSetVersionQuery_stmt.reset();
   }
 
 public:
@@ -237,7 +235,7 @@ public:
 
   bool updateEmptyNonTerminals(domainid_t domain_id, set<DNSName>& insert ,set<DNSName>& erase, bool remove) override;
 
-  bool replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset) override;
+  bool replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset, int empty_rrset_lock_version = -1) override;
   bool listSubZone(const ZoneName &zone, domainid_t domain_id) override;
   bool addDomainKey(const ZoneName& name, const KeyData& key, int64_t& id) override;
   bool getDomainKeys(const ZoneName& name, std::vector<KeyData>& keys) override;
@@ -270,7 +268,6 @@ protected:
   void extractRecord(SSqlStatement::row_t& row, DNSResourceRecord& rr);
   void extractRecord_unsafe(SSqlStatement::row_t& row, DNSResourceRecord& rec, std::vector<std::pair<std::string, std::string>>& invalid);
   void extractComment(SSqlStatement::row_t& row, Comment& c);
-  int getExistingRrsetVersion(domainid_t domain_id, const DNSName& qname, const QType& qt);
   void setLastCheck(domainid_t domain_id, time_t lastcheck);
   bool isConnectionUsable() {
     if (d_db) {
@@ -385,8 +382,6 @@ private:
   string d_SearchRecordsQuery;
   string d_SearchCommentsQuery;
 
-  string d_GetRRSetVersionQuery;
-
   unique_ptr<SSqlStatement> d_NoIdQuery_stmt;
   unique_ptr<SSqlStatement> d_IdQuery_stmt;
   unique_ptr<SSqlStatement> d_ANYNoIdQuery_stmt;
@@ -455,8 +450,6 @@ private:
   unique_ptr<SSqlStatement> d_DeleteCommentsQuery_stmt;
   unique_ptr<SSqlStatement> d_SearchRecordsQuery_stmt;
   unique_ptr<SSqlStatement> d_SearchCommentsQuery_stmt;
-
-  unique_ptr<SSqlStatement> d_GetRRSetVersionQuery_stmt;
 
 protected:
   std::unique_ptr<SSql> d_db{nullptr};

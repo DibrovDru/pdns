@@ -711,6 +711,24 @@ static std::string normalizeJsonString(const std::string& jsonContent)
   return ret.str();
 }
 
+/** 0 if JSON has no rrset version (e.g. zone create); otherwise same rules as PATCH zone. */
+static int rrsetVersionFromContainerOrZero(const Json& container)
+{
+  if (container.object_items().count("version") == 0 || container["version"].is_null()) {
+    return 0;
+  }
+  try {
+    const int v = intFromJson(container, "version");
+    if (v < 0) {
+      throw ApiException("RRset \"version\" must be non-negative");
+    }
+    return v;
+  }
+  catch (const JsonException& e) {
+    throw ApiException(string("RRset \"version\": ") + e.what());
+  }
+}
+
 static void gatherRecords(const Json& container, const DNSName& qname, const QType& qtype, const uint32_t ttl, vector<DNSResourceRecord>& new_records)
 {
   DNSResourceRecord resourceRecord;
@@ -720,6 +738,7 @@ static void gatherRecords(const Json& container, const DNSName& qname, const QTy
   resourceRecord.ttl = ttl;
 
   validateGatheredRRType(resourceRecord);
+  const int shared_rrset_version = rrsetVersionFromContainerOrZero(container);
   const auto& items = container["records"].array_items();
   for (const auto& record : items) {
     string content = stringFromJson(record, "content");
@@ -759,6 +778,7 @@ static void gatherRecords(const Json& container, const DNSName& qname, const QTy
       throw ApiException("Record " + resourceRecord.qname.toString() + "/" + resourceRecord.qtype.toString() + " '" + content + "': " + e.what());
     }
 
+    resourceRecord.rrset_version = shared_rrset_version;
     new_records.push_back(resourceRecord);
   }
 }
@@ -1564,6 +1584,11 @@ static void idempotencyPersistSuccess(RedisClient& redis, const std::string& red
 
 static void runApiWithIdempotency(HttpRequest* req, HttpResponse* resp, const std::function<void()>& handler)
 {
+  if (!::arg().mustDo("api-idempotency")) {
+    handler();
+    return;
+  }
+
   const auto idempIt = req->headers.find("idempotency-key");
   if (idempIt == req->headers.end() || idempIt->second.empty()) {
     throw ApiException("Missing required header: Idempotency-Key");
@@ -2652,7 +2677,7 @@ static changeType validateChangeType(const std::string& changetype)
 // `new_records', making sure to remove no longer needed ENT entries, and
 // also enforcing the exclusivity rules (at most one CNAME, DNAME and SOA,
 // etc).
-static void replaceZoneRecords(const DomainInfo& domainInfo, const ZoneName& zonename, vector<DNSResourceRecord>& new_records, const DNSName& qname, const QType qtype)
+static bool replaceZoneRecords(const DomainInfo& domainInfo, const ZoneName& zonename, vector<DNSResourceRecord>& new_records, const DNSName& qname, const QType qtype)
 {
   bool ent_present = false;
   bool dname_seen = qtype == QType::DNAME;
@@ -2682,12 +2707,13 @@ static void replaceZoneRecords(const DomainInfo& domainInfo, const ZoneName& zon
   if (!new_records.empty() && ent_present) {
     QType qt_ent{QType::ENT};
     if (!domainInfo.backend->replaceRRSet(domainInfo.id, qname, qt_ent, new_records)) {
-      throw ApiException("Hosting backend does not support editing records.");
+      return false;
     }
   }
   if (!domainInfo.backend->replaceRRSet(domainInfo.id, qname, qtype, new_records)) {
-    throw ApiException("Hosting backend does not support editing records.");
+    return false;
   }
+  return true;
 }
 
 // Parse the record name and type from a Json patch record.
@@ -2699,6 +2725,15 @@ static void parseRecordNameAndType(const Json& rrset, DNSName& qname, QType& qty
   if (qtype.getCode() == QType::ENT) {
     throw ApiException("RRset " + qname.toString() + " IN " + stringFromJson(rrset, "type") + ": unknown type given");
   }
+}
+
+/** Client opted into optimistic locking: key "version" is present and not JSON null. */
+static bool rrsetJsonHasVersion(const Json& rrset)
+{
+  if (rrset.object_items().count("version") == 0) {
+    return false;
+  }
+  return !rrset["version"].is_null();
 }
 
 static int rrsetVersionFromJson(const Json& rrset)
@@ -2715,35 +2750,22 @@ static int rrsetVersionFromJson(const Json& rrset)
   }
 }
 
-static int getBackendRrsetVersion(DomainInfo& domainInfo, const DNSName& qname, const QType& qtype)
-{
-  domainInfo.backend->APILookup(qtype, qname, static_cast<int>(domainInfo.id), true);
-  DNSResourceRecord rr;
-  int version{0};
-  bool any{false};
-  while (domainInfo.backend->get(rr)) {
-    if (!any) {
-      version = rr.rrset_version;
-      any = true;
-    }
-  }
-  return any ? version : 0;
-}
-
 // The return value of the apply* functions below
 enum applyResult
 {
   SUCCESS, // successful and changes performed
   NOP, // successful but no changes needed
+  SKIPPED, // optimistic lock / replace conflict; add this RRset to skipped list
   ABORT // failed horribly, don't process anything further
 };
 
 // Apply a DELETE changetype.
-static applyResult applyDelete(const DomainInfo& domainInfo, DNSName& qname, QType& qtype, bool returnRRset, std::vector<DNSResourceRecord>& rrset)
+static applyResult applyDelete(const DomainInfo& domainInfo, const Json& container, DNSName& qname, QType& qtype, bool returnRRset, std::vector<DNSResourceRecord>& rrset)
 {
   // Delete all matching qname/qtype RRs (and implicitly, comments).
-  if (!domainInfo.backend->replaceRRSet(domainInfo.id, qname, qtype, {})) {
-    throw ApiException("Hosting backend does not support editing records.");
+  const int emptyLockVer = rrsetJsonHasVersion(container) ? rrsetVersionFromJson(container) : 0;
+  if (!domainInfo.backend->replaceRRSet(domainInfo.id, qname, qtype, {}, emptyLockVer)) {
+    return SKIPPED;
   }
   // Update RRset cache if needed
   if (returnRRset) {
@@ -2810,7 +2832,9 @@ static applyResult applyReplace(const DomainInfo& domainInfo, const ZoneName& zo
   }
 
   if (replace_records) {
-    replaceZoneRecords(domainInfo, zonename, new_records, qname, qtype);
+    if (!replaceZoneRecords(domainInfo, zonename, new_records, qname, qtype)) {
+      return SKIPPED;
+    }
   }
   if (replace_comments) {
     if (!domainInfo.backend->replaceComments(domainInfo.id, qname, qtype, new_comments)) {
@@ -2879,7 +2903,7 @@ static applyResult applyPruneOrExtend(const DomainInfo& domainInfo, const ZoneNa
     }
 
     if (!domainInfo.backend->replaceRRSet(domainInfo.id, qname, qtype, rrset)) {
-      throw ApiException("Hosting backend does not support editing records.");
+      return SKIPPED;
     }
   }
   catch (const JsonException& e) {
@@ -2963,13 +2987,6 @@ static void patchZone(UeberBackend& backend, const ZoneName& zonename, DomainInf
       QType qtype;
       parseRecordNameAndType(container, qname, qtype);
 
-      const int clientVersion = rrsetVersionFromJson(container);
-      const int backendVersion = getBackendRrsetVersion(domainInfo, qname, qtype);
-      if (clientVersion != backendVersion) {
-        skippedRrsets.push_back(container);
-        continue;
-      }
-
       key currentKey{qname, qtype};
       bool cacheNeeded{false};
       if (auto iter = changes.find(currentKey); iter != changes.end()) {
@@ -2979,34 +2996,41 @@ static void patchZone(UeberBackend& backend, const ZoneName& zonename, DomainInf
 
       applyResult result{ABORT};
       std::vector<DNSResourceRecord> rrset;
-      switch (operationType) {
-      case DELETE:
-        result = applyDelete(domainInfo, qname, qtype, cacheNeeded, rrset);
-        break;
-      case REPLACE:
-        result = applyReplace(domainInfo, zonename, container, qname, qtype, allowUnderscores, soa, resp, cacheNeeded, rrset);
-        break;
-      case PRUNE:
-      case EXTEND:
-        // First, obtain the current RRset, either from the backend or from
-        // our local cache if we already did some operations.
-        if (const auto iter = cache.find(currentKey); iter != cache.end()) {
-          rrset = std::move(iter->second);
-        }
-        else {
-          DNSResourceRecord record;
-          domainInfo.backend->lookup(qtype, qname, domainInfo.id);
-          while (domainInfo.backend->get(record)) {
-            rrset.emplace_back(record);
+      try {
+        switch (operationType) {
+        case DELETE:
+          result = applyDelete(domainInfo, container, qname, qtype, cacheNeeded, rrset);
+          break;
+        case REPLACE:
+          result = applyReplace(domainInfo, zonename, container, qname, qtype, allowUnderscores, soa, resp, cacheNeeded, rrset);
+          break;
+        case PRUNE:
+        case EXTEND:
+          // First, obtain the current RRset, either from the backend or from
+          // our local cache if we already did some operations.
+          if (const auto iter = cache.find(currentKey); iter != cache.end()) {
+            // Copy so a skipped/failed apply does not leave an empty vector in the cache.
+            rrset = iter->second;
           }
+          else {
+            DNSResourceRecord record;
+            domainInfo.backend->lookup(qtype, qname, domainInfo.id);
+            while (domainInfo.backend->get(record)) {
+              rrset.emplace_back(record);
+            }
+          }
+          result = applyPruneOrExtend(domainInfo, zonename, container, qname, qtype, allowUnderscores, soa, resp, operationType, rrset);
+          break;
         }
-        result = applyPruneOrExtend(domainInfo, zonename, container, qname, qtype, allowUnderscores, soa, resp, operationType, rrset);
-        break;
       }
-      if (result == ABORT) {
-        // Proper error response has been set up, no need to do anything further.
-        domainInfo.backend->abortTransaction();
-        return;
+      catch (const ApiException&) {
+        skippedRrsets.push_back(container);
+        continue;
+      }
+
+      if (result == ABORT || result == SKIPPED) {
+        skippedRrsets.push_back(container);
+        continue;
       }
       if (result == SUCCESS) {
         madeAnyChanges = true;

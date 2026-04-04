@@ -190,7 +190,7 @@ public:
   //! fills the soadata struct with the SOA details. Returns false if there is no SOA.
   virtual bool getSOA(const ZoneName& domain, domainid_t zoneId, SOAData& soaData);
 
-  virtual bool replaceRRSet(domainid_t /* domain_id */, const DNSName& /* qname */, const QType& /* qt */, const vector<DNSResourceRecord>& /* rrset */)
+  virtual bool replaceRRSet(domainid_t /* domain_id */, const DNSName& /* qname */, const QType& /* qt */, const vector<DNSResourceRecord>& /* rrset */, int /* empty_rrset_lock_version */ = -1)
   {
     return false;
   }

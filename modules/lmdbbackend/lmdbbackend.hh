@@ -86,7 +86,7 @@ public:
   bool feedRecord(const DNSResourceRecord& r, const DNSName& ordername, bool ordernameIsNSEC3 = false) override;
   bool feedEnts(domainid_t domain_id, map<DNSName, bool>& nonterm) override;
   bool feedEnts3(domainid_t domain_id, const DNSName& domain, map<DNSName, bool>& nonterm, const NSEC3PARAMRecordContent& ns3prc, bool narrow) override;
-  bool replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset) override;
+  bool replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset, int empty_rrset_lock_version = 0) override;
   bool replaceComments(domainid_t domain_id, const DNSName& qname, const QType& qt, const vector<Comment>& comments) override;
 
   void viewList(vector<string>& /* result */) override;

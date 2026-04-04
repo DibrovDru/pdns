@@ -140,8 +140,6 @@ GSQLBackend::GSQLBackend(const string &mode, const string &suffix)
   d_SearchRecordsQuery = getArg("search-records-query");
   d_SearchCommentsQuery = getArg("search-comments-query");
 
-  d_GetRRSetVersionQuery = getArg("get-rrset-version-query");
-
   d_query_stmt = nullptr;
   d_NoIdQuery_stmt = nullptr;
   d_IdQuery_stmt = nullptr;
@@ -210,7 +208,6 @@ GSQLBackend::GSQLBackend(const string &mode, const string &suffix)
   d_DeleteCommentsQuery_stmt = nullptr;
   d_SearchRecordsQuery_stmt = nullptr;
   d_SearchCommentsQuery_stmt = nullptr;
-  d_GetRRSetVersionQuery_stmt = nullptr;
 }
 
 void GSQLBackend::setNotified(domainid_t domain_id, uint32_t serial)
@@ -1943,49 +1940,17 @@ void GSQLBackend::getAllDomains(vector<DomainInfo>* domains, bool getSerial, boo
   }
 }
 
-int GSQLBackend::getExistingRrsetVersion(domainid_t domain_id, const DNSName& qname, const QType& qt)
-{
-  try {
-    reconnectIfNeeded();
-    // clang-format off
-    d_GetRRSetVersionQuery_stmt->
-      bind("domain_id", domain_id)->
-      bind("qname", qname)->
-      bind("qtype", qt.toString())->
-      execute();
-    // clang-format on
-    SSqlStatement::row_t row;
-    if (d_GetRRSetVersionQuery_stmt->hasNextRow()) {
-      d_GetRRSetVersionQuery_stmt->nextRow(row);
-      d_GetRRSetVersionQuery_stmt->reset();
-      if (!row.empty() && !row[0].empty()) {
-        return pdns::checked_stoi<int>(row[0]);
-      }
-    }
-    d_GetRRSetVersionQuery_stmt->reset();
-  }
-  catch (SSqlException& e) {
-    throw PDNSException("GSQLBackend unable to read rrset version: " + e.txtReason());
-  }
-  return 0;
-}
-
 // NOLINTNEXTLINE(readability-identifier-length)
-bool GSQLBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset)
+bool GSQLBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset, int empty_rrset_lock_version)
 {
-  int old_ver = 0;
+  const int client_ver = !rrset.empty() ? rrset.front().rrset_version : (empty_rrset_lock_version >= 0 ? empty_rrset_lock_version : 0);
+
+  int64_t total_deleted = 0;
   try {
     reconnectIfNeeded();
 
     if (!d_inTransaction) {
       throw PDNSException("replaceRRSet called outside of transaction");
-    }
-
-    if (qt != QType::ANY) {
-      old_ver = getExistingRrsetVersion(domain_id, qname, qt);
-    }
-    else if (!rrset.empty()) {
-      old_ver = getExistingRrsetVersion(domain_id, qname, rrset.front().qtype);
     }
 
     if (qt != QType::ANY) {
@@ -1995,30 +1960,67 @@ bool GSQLBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const
           bind("domain_id", domain_id)->
           bind("qname", qname)->
           bind("qtype", "TYPE"+std::to_string(qt.getCode()))->
-          execute()->
-          reset();
+          bind("lock_lhs", client_ver)->
+          bind("lock_rhs", client_ver)->
+          execute();
         // clang-format on
+        {
+          const int64_t n = d_DeleteRRSetQuery_stmt->getRowsModified();
+          if (client_ver != 0) {
+            if (n < 0) {
+              d_DeleteRRSetQuery_stmt->reset();
+              throw PDNSException("GSQLBackend replaceRRSet: DELETE row count unavailable (SQL driver)");
+            }
+            total_deleted += n;
+          }
+        }
+        d_DeleteRRSetQuery_stmt->reset();
       }
       // clang-format off
       d_DeleteRRSetQuery_stmt->
         bind("domain_id", domain_id)->
         bind("qname", qname)->
         bind("qtype", qt.toString())->
-        execute()->
-        reset();
+        bind("lock_lhs", client_ver)->
+        bind("lock_rhs", client_ver)->
+        execute();
       // clang-format on
-    } else {
+      {
+        const int64_t n = d_DeleteRRSetQuery_stmt->getRowsModified();
+        if (client_ver != 0) {
+          if (n < 0) {
+            d_DeleteRRSetQuery_stmt->reset();
+            throw PDNSException("GSQLBackend replaceRRSet: DELETE row count unavailable (SQL driver)");
+          }
+          total_deleted += n;
+        }
+      }
+      d_DeleteRRSetQuery_stmt->reset();
+    }
+    else {
       // clang-format off
       d_DeleteNamesQuery_stmt->
         bind("domain_id", domain_id)->
         bind("qname", qname)->
-        execute()->
-        reset();
+        bind("lock_lhs", client_ver)->
+        bind("lock_rhs", client_ver)->
+        execute();
       // clang-format on
+      total_deleted = d_DeleteNamesQuery_stmt->getRowsModified();
+      d_DeleteNamesQuery_stmt->reset();
+      if (client_ver != 0) {
+        if (total_deleted < 0) {
+          throw PDNSException("GSQLBackend replaceRRSet: DELETE row count unavailable (SQL driver)");
+        }
+      }
     }
   }
   catch (SSqlException &e) {
     throw PDNSException("GSQLBackend unable to delete RRSet " + qname.toLogString() + "|" + qt.toString() + ": "+e.txtReason());
+  }
+
+  if (client_ver != 0 && total_deleted == 0) {
+    return false;
   }
 
   if (rrset.empty()) {
@@ -2040,13 +2042,8 @@ bool GSQLBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const
     return true;
   }
 
-  int new_ver;
-  if (old_ver >= INT_MAX) {
-    new_ver = 0;
-  }
-  else {
-    new_ver = old_ver + 1;
-  }
+  const int base_ver = rrset.front().rrset_version;
+  const int new_ver = (base_ver == 0) ? 0 : ((base_ver >= INT_MAX) ? 1 : base_ver + 1);
   d_replace_rrset_version = new_ver;
   d_inReplaceRRSet = true;
   try {
@@ -2105,12 +2102,6 @@ bool GSQLBackend::feedRecord(const DNSResourceRecord& r, const DNSName& ordernam
     }
     else if (d_inReplaceRRSet) {
       verToStore = d_replace_rrset_version;
-    }
-    else {
-      verToStore = getExistingRrsetVersion(r.domain_id, r.qname, r.qtype);
-      if (verToStore == 0) {
-        verToStore = 1;
-      }
     }
     d_InsertRecordQuery_stmt->bind("version", verToStore);
 

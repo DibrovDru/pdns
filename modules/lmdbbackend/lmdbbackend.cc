@@ -1532,7 +1532,7 @@ bool LMDBBackend::feedEnts3(domainid_t domain_id, const DNSName& domain, map<DNS
 
 // might be called within a transaction, might also be called alone
 // NOLINTNEXTLINE(readability-identifier-length)
-bool LMDBBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset)
+bool LMDBBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset, int /* empty_rrset_lock_version */)
 {
   // zonk qname/qtype within domain_id (go through qname, check domain_id && qtype)
   shared_ptr<RecordsRWTransaction> txn;

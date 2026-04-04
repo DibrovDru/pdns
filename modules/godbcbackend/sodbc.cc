@@ -216,8 +216,14 @@ public:
     return bind(name, p);
   }
 
+  int64_t getRowsModified() override
+  {
+    return d_rows_modified;
+  }
+
   SSqlStatement* execute() override
   {
+    d_rows_modified = -1;
     prepareStatement();
     SQLRETURN result;
     // cerr<<"execute("<<d_query<<")"<<endl;
@@ -240,8 +246,16 @@ public:
       d_result = SQLFetch(d_statement);
       // cerr<<"first SQLFetch done, d_result="<<d_result<<endl;
     }
-    else
+    else {
       d_result = SQL_NO_DATA;
+      SQLLEN rowcount = 0;
+      result = SQLRowCount(d_statement, &rowcount);
+      if (result == SQL_SUCCESS || result == SQL_SUCCESS_WITH_INFO) {
+        if (rowcount >= 0) {
+          d_rows_modified = static_cast<int64_t>(rowcount);
+        }
+      }
+    }
 
     if (d_result != SQL_NO_DATA)
       testResult(d_result, SQL_HANDLE_STMT, d_statement, "Could not do first SQLFetch for (" + d_query + ").");
@@ -370,6 +384,7 @@ private:
 
   //! Column info.
   SQLSMALLINT m_columncount;
+  int64_t d_rows_modified{-1};
 };
 
 SSqlStatement* SODBCStatement::nextRow(row_t& row)

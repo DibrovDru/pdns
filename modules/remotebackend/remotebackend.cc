@@ -733,7 +733,7 @@ bool RemoteBackend::createSecondaryDomain(const string& ipAddress, const ZoneNam
   return this->send(query) && this->recv(answer);
 }
 
-bool RemoteBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qtype, const vector<DNSResourceRecord>& rrset)
+bool RemoteBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qtype, const vector<DNSResourceRecord>& rrset, int empty_rrset_lock_version)
 {
   Json::array json_rrset;
   for (const auto& rr : rrset) {
@@ -746,9 +746,20 @@ bool RemoteBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, con
       {"auth", rr.auth}});
   }
 
+  Json::object params{
+    {"domain_id", domain_id},
+    {"qname", qname.toString()},
+    {"qtype", qtype.toString()},
+    {"trxid", static_cast<double>(d_trxid)},
+    {"rrset", json_rrset},
+  };
+  if (empty_rrset_lock_version >= 0) {
+    params["empty_rrset_lock_version"] = empty_rrset_lock_version;
+  }
+
   Json query = Json::object{
     {"method", "replaceRRSet"},
-    {"parameters", Json::object{{"domain_id", domain_id}, {"qname", qname.toString()}, {"qtype", qtype.toString()}, {"trxid", static_cast<double>(d_trxid)}, {"rrset", json_rrset}}}};
+    {"parameters", params}};
 
   Json answer;
   return this->send(query) && this->recv(answer);

@@ -154,8 +154,8 @@ public:
     declare(suffix, "info-consumer-members-query", "", "select id, name, options, master from domains where type='SLAVE' and catalog=$1");
     declare(suffix, "delete-domain-query", "", "delete from domains where name=$1");
     declare(suffix, "delete-zone-query", "", "delete from records where domain_id=$1");
-    declare(suffix, "delete-rrset-query", "", "delete from records where domain_id=$1 and name=$2 and type=$3");
-    declare(suffix, "delete-names-query", "", "delete from records where domain_id=$1 and name=$2");
+    declare(suffix, "delete-rrset-query", "", "delete from records where domain_id=$1 and name=$2 and type=$3 and ($4 = 0 or version = $5)");
+    declare(suffix, "delete-names-query", "", "delete from records where domain_id=$1 and name=$2 and ($3 = 0 or version = $4)");
 
     declare(suffix, "add-domain-key-query", "", "insert into cryptokeys (domain_id, flags, active, published, content) select id, $1, $2, $3, $4 from domains where name=$5 returning id");
     declare(suffix, "get-last-inserted-key-id-query", "", "select pdns_bug_should_not_get_here('https://github.com/PowerDNS/pdns/pull/10392'), 1/0");
@@ -184,8 +184,6 @@ public:
     declare(suffix, "delete-comments-query", "", "DELETE FROM comments WHERE domain_id=$1");
     declare(suffix, "search-records-query", "", record_query + "records.name ILIKE $1 OR records.content ILIKE $2 LIMIT $3");
     declare(suffix, "search-comments-query", "", "SELECT domain_id,name,type,modified_at,account,comment FROM comments WHERE name ILIKE $1 OR comment ILIKE $2 LIMIT $3");
-
-    declare(suffix, "get-rrset-version-query", "", "SELECT COALESCE(MAX(version),0) FROM records WHERE domain_id=$1 AND name=$2 AND type=$3");
   }
 
   DNSBackend* make(const string& suffix = "") override

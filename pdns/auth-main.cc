@@ -188,6 +188,7 @@ static void declareArguments()
   ::arg().setSwitch("api", "Enable/disable the REST API (including HTTP listener)") = "no";
   ::arg().set("api-key", "Static pre-shared authentication key for access to the REST API") = "";
   ::arg().setSwitch("default-api-rectify", "Default API-RECTIFY value for zones") = "yes";
+  ::arg().setSwitch("api-idempotency", "Require Idempotency-Key header and Redis for mutating zone/cryptokey API requests") = "no";
   ::arg().setSwitch("dname-processing", "If we should support DNAME records") = "no";
 
   ::arg().setCmd("help", "Provide a helpful message");

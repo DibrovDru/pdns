@@ -126,8 +126,8 @@ public:
     declare(suffix, "info-consumer-members-query", "", "select id, name, options, master from domains where type='SLAVE' and catalog=?");
     declare(suffix, "delete-domain-query", "", "delete from domains where name=?");
     declare(suffix, "delete-zone-query", "", "delete from records where domain_id=?");
-    declare(suffix, "delete-rrset-query", "", "delete from records where domain_id=? and name=? and type=?");
-    declare(suffix, "delete-names-query", "", "delete from records where domain_id=? and name=?");
+    declare(suffix, "delete-rrset-query", "", "delete from records where domain_id=? and name=? and type=? and (? = 0 or version = ?)");
+    declare(suffix, "delete-names-query", "", "delete from records where domain_id=? and name=? and (? = 0 or version = ?)");
 
     declare(suffix, "add-domain-key-query", "", "insert into cryptokeys (domain_id, flags, active, published, content) select id, ?, ?, ?, ? from domains where name=?");
     declare(suffix, "get-last-inserted-key-id-query", "", "select ident_current('cryptokeys')");
@@ -159,8 +159,6 @@ public:
     declare(suffix, "delete-comments-query", "", "DELETE FROM comments WHERE domain_id=?");
     declare(suffix, "search-records-query", "", record_query + "records.name LIKE ? OR records.content LIKE ? LIMIT ?");
     declare(suffix, "search-comments-query", "", "SELECT domain_id,name,type,modified_at,account,comment FROM comments WHERE name LIKE ? OR comment LIKE ? LIMIT ?");
-
-    declare(suffix, "get-rrset-version-query", "", "SELECT COALESCE(MAX(version),0) FROM records WHERE domain_id=? AND name=? AND type=?");
   }
 
   //! Constructs a new gODBCBackend object.
