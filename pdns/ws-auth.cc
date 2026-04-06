@@ -711,7 +711,7 @@ static std::string normalizeJsonString(const std::string& jsonContent)
   return ret.str();
 }
 
-/** 0 if JSON has no rrset version (e.g. zone create); otherwise same rules as PATCH zone. */
+/** 0 if JSON has no rrset version (e.g. zone create); -1 = create new RRset (stored as version 1); else PATCH rules. */
 static int rrsetVersionFromContainerOrZero(const Json& container)
 {
   if (container.object_items().count("version") == 0 || container["version"].is_null()) {
@@ -719,8 +719,8 @@ static int rrsetVersionFromContainerOrZero(const Json& container)
   }
   try {
     const int v = intFromJson(container, "version");
-    if (v < 0) {
-      throw ApiException("RRset \"version\" must be non-negative");
+    if (v < -1) {
+      throw ApiException("RRset \"version\" must be >= -1 (-1 means create new RRset, stored as version 1)");
     }
     return v;
   }
@@ -2740,8 +2740,8 @@ static int rrsetVersionFromJson(const Json& rrset)
 {
   try {
     const int v = intFromJson(rrset, "version");
-    if (v < 0) {
-      throw ApiException("RRset \"version\" must be non-negative");
+    if (v < -1) {
+      throw ApiException("RRset \"version\" must be >= -1 (-1 means create new RRset, stored as version 1)");
     }
     return v;
   }

@@ -1943,7 +1943,11 @@ void GSQLBackend::getAllDomains(vector<DomainInfo>* domains, bool getSerial, boo
 // NOLINTNEXTLINE(readability-identifier-length)
 bool GSQLBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const QType& qt, const vector<DNSResourceRecord>& rrset, int empty_rrset_lock_version)
 {
-  const int client_ver = !rrset.empty() ? rrset.front().rrset_version : (empty_rrset_lock_version >= 0 ? empty_rrset_lock_version : 0);
+  // API version -1: client creates a new RRset (no prior rows). Use lock 0 on DELETE so
+  // "deleted 0 rows" does not fail; inserted rows get version 1 (see new_ver below).
+  const int client_ver = !rrset.empty()
+    ? (rrset.front().rrset_version == -1 ? 0 : rrset.front().rrset_version)
+    : (empty_rrset_lock_version >= 0 ? empty_rrset_lock_version : 0);
 
   int64_t total_deleted = 0;
   try {
@@ -2043,7 +2047,10 @@ bool GSQLBackend::replaceRRSet(domainid_t domain_id, const DNSName& qname, const
   }
 
   const int base_ver = rrset.front().rrset_version;
-  const int new_ver = (base_ver == 0) ? 0 : ((base_ver >= INT_MAX) ? 1 : base_ver + 1);
+  const int new_ver = (base_ver == -1) ? 1
+    : (base_ver == 0)                    ? 0
+    : (base_ver >= INT_MAX)              ? 1
+                                         : base_ver + 1;
   d_replace_rrset_version = new_ver;
   d_inReplaceRRSet = true;
   try {
